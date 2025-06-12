@@ -149,7 +149,11 @@
                             <h2 class="text-2xl font-semibold text-stone-800">Transaction History</h2>
                             <p class="text-stone-500 mt-1">Here is a list of all your recorded expenses. Use the filters to narrow down the view.</p>
                         </div>
-                        <button id="export-data-btn" class="bg-stone-600 text-white px-4 py-2 rounded-lg hover:bg-stone-700 transition-colors text-sm font-medium">Export Data</button>
+                        <div class="flex gap-2">
+                            <input type="file" id="import-file-input" accept=".csv" class="hidden">
+                            <button id="import-data-btn" class="bg-stone-600 text-white px-4 py-2 rounded-lg hover:bg-stone-700 transition-colors text-sm font-medium">Import Data</button>
+                            <button id="export-data-btn" class="bg-stone-600 text-white px-4 py-2 rounded-lg hover:bg-stone-700 transition-colors text-sm font-medium">Export Data</button>
+                        </div>
                     </div>
                     <div class="flex flex-wrap gap-2 mb-4">
                         <button class="filter-btn bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium" data-filter="all">All</button>
@@ -211,6 +215,13 @@
             variable: 'Variable',
             'one-off': 'One-Off'
         };
+
+        const categoryLookup = {
+            'Recurring': 'recurring',
+            'Split': 'split',
+            'Variable': 'variable',
+            'One-Off': 'one-off'
+        };
         
         const categorySelect = document.getElementById('category');
         const amountInputGroup = document.getElementById('amount-input-group');
@@ -231,6 +242,8 @@
         const trackerNameInput = document.getElementById('tracker-name-input');
         const saveNameBtn = document.getElementById('save-name-btn');
         const exportDataBtn = document.getElementById('export-data-btn');
+        const importDataBtn = document.getElementById('import-data-btn');
+        const importFileInput = document.getElementById('import-file-input');
 
         const ctx = document.getElementById('spending-chart').getContext('2d');
         let spendingChart = new Chart(ctx, {
@@ -316,8 +329,8 @@
                         userIdDisplay.textContent = `User ID: ${userId}`;
                         console.log("Authenticated with user ID:", userId);
                         isAuthReady = true;
-                        await loadUserProfile(); // Load user profile (including tracker name)
-                        await loadTransactions(); // Load transactions
+                        await loadUserProfile();
+                        await loadTransactions();
                         loadingOverlay.classList.add('hidden');
                         appContent.classList.remove('hidden');
                     } else {
@@ -351,9 +364,9 @@
                     trackerNameInput.value = trackerName;
                     console.log("User profile loaded:", trackerName);
                 } else {
-                    trackerName = "Your Personal Finances"; // Reset to default if no profile
+                    trackerName = "Your Personal Finances";
                     trackerNameDisplay.textContent = trackerName;
-                    trackerNameInput.value = ""; // Clear input if no saved name
+                    trackerNameInput.value = "";
                     console.log("No user profile found, using default tracker name.");
                 }
             }, (error) => {
@@ -419,7 +432,7 @@
                 } catch (error) {
                     console.error("Error saving document:", error);
                 }
-            }, 500); // Debounce by 500ms
+            }, 500);
         }
 
         categorySelect.addEventListener('change', (e) => {
@@ -507,7 +520,7 @@
                 trackerNameDisplay.textContent = trackerName;
                 saveUserProfileDebounced();
             } else {
-                trackerName = "Your Personal Finances"; // Reset to default if input is empty
+                trackerName = "Your Personal Finances";
                 trackerNameDisplay.textContent = trackerName;
                 saveUserProfileDebounced();
             }
@@ -517,7 +530,6 @@
         exportDataBtn.addEventListener('click', () => {
             if (transactions.length === 0) {
                 console.log("No data to export.");
-                // In a real app, you'd show a user-friendly message, not just console log.
                 return;
             }
 
@@ -527,10 +539,10 @@
 
             transactions.forEach(t => {
                 const row = [
-                    `"${t.description.replace(/"/g, '""')}"`, // Quote and escape double quotes
+                    `"${t.description.replace(/"/g, '""')}"`,
                     categoryDisplayNames[t.category],
                     t.amount,
-                    new Date(t.timestamp).toLocaleString('en-GB') // Format timestamp
+                    new Date(t.timestamp).toLocaleString('en-GB')
                 ];
                 csvRows.push(row.join(','));
             });
@@ -548,6 +560,101 @@
             document.body.removeChild(link);
         });
 
+        // Import data function
+        importDataBtn.addEventListener('click', () => {
+            importFileInput.click(); // Trigger the hidden file input click
+        });
+
+        importFileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) {
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const csvContent = e.target.result;
+                const importedTransactions = parseCSV(csvContent);
+                if (importedTransactions.length > 0) {
+                    // Add new transactions to the existing list
+                    transactions.push(...importedTransactions);
+                    updateUI();
+                    saveTransactionsDebounced();
+                    console.log(`Successfully imported ${importedTransactions.length} transactions.`);
+                } else {
+                    console.log("No valid transactions found in the imported file.");
+                }
+                importFileInput.value = ''; // Clear the file input
+            };
+            reader.onerror = () => {
+                console.error("Error reading file.");
+            };
+            reader.readAsText(file);
+        });
+
+        function parseCSV(csvString) {
+            const lines = csvString.trim().split('\n');
+            if (lines.length < 2) { // Need at least header and one data row
+                console.error("CSV file is empty or malformed.");
+                return [];
+            }
+
+            const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+            const dataRows = lines.slice(1);
+            const parsedData = [];
+
+            dataRows.forEach(row => {
+                const columns = parseCSVLine(row);
+                if (columns.length === headers.length) {
+                    const description = columns[0];
+                    const categoryDisplayName = columns[1];
+                    const amount = parseFloat(columns[2]);
+                    const timestamp = columns[3];
+
+                    const category = categoryLookup[categoryDisplayName] || null;
+
+                    if (description && category && !isNaN(amount) && amount > 0 && timestamp) {
+                        parsedData.push({
+                            id: Date.now() + Math.random(), // Generate new unique ID for imported transactions
+                            description,
+                            category,
+                            amount,
+                            timestamp: new Date(timestamp).toISOString() // Ensure valid ISO string
+                        });
+                    } else {
+                        console.warn("Skipping malformed row:", row);
+                    }
+                } else {
+                    console.warn("Skipping row with incorrect number of columns:", row);
+                }
+            });
+            return parsedData;
+        }
+
+        // Helper function to parse a CSV line, handling quoted fields
+        function parseCSVLine(line) {
+            const result = [];
+            let inQuote = false;
+            let currentField = '';
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+                if (char === '"' && (i === 0 || line[i-1] === ',' || inQuote)) { // Start or end of a quote, or escaped quote
+                    if (inQuote && i + 1 < line.length && line[i+1] === '"') { // Escaped double quote ""
+                        currentField += '"';
+                        i++; // Skip the next double quote
+                    } else {
+                        inQuote = !inQuote;
+                    }
+                } else if (char === ',' && !inQuote) {
+                    result.push(currentField.trim());
+                    currentField = '';
+                } else {
+                    currentField += char;
+                }
+            }
+            result.push(currentField.trim()); // Add the last field
+            return result;
+        }
 
         function updateUI() {
             calculateTotals();
@@ -625,3 +732,4 @@
     </script>
 </body>
 </html>
+
