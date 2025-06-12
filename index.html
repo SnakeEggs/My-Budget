@@ -65,8 +65,14 @@
 
         <header class="text-center mb-8">
             <h1 class="text-4xl font-bold text-stone-900">Personal Spending Tracker</h1>
-            <p class="text-stone-600 mt-2">A dynamic dashboard to manage your finances in real-time.</p>
+            <p id="tracker-name-display" class="text-stone-600 mt-2">Your Personal Finances</p>
             <p id="user-id-display" class="text-sm text-stone-400 mt-1"></p>
+
+            <div class="mt-4 flex flex-col sm:flex-row items-center justify-center gap-2">
+                <label for="tracker-name-input" class="sr-only">Set Tracker Name</label>
+                <input type="text" id="tracker-name-input" placeholder="Enter your tracker name (e.g., My Budget)" class="p-2 border border-stone-300 rounded-md shadow-sm w-full sm:w-auto flex-grow max-w-sm">
+                <button id="save-name-btn" class="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors text-sm font-medium">Save Name</button>
+            </div>
         </header>
 
         <main>
@@ -138,9 +144,12 @@
                 </section>
                 
                 <section id="transactions-section" class="lg:col-span-3 bg-white p-6 rounded-xl shadow-sm border border-stone-200">
-                    <div class="text-left mb-6">
-                        <h2 class="text-2xl font-semibold text-stone-800">Transaction History</h2>
-                        <p class="text-stone-500 mt-1">Here is a list of all your recorded expenses. Use the filters to narrow down the view.</p>
+                    <div class="flex justify-between items-center mb-6">
+                        <div class="text-left">
+                            <h2 class="text-2xl font-semibold text-stone-800">Transaction History</h2>
+                            <p class="text-stone-500 mt-1">Here is a list of all your recorded expenses. Use the filters to narrow down the view.</p>
+                        </div>
+                        <button id="export-data-btn" class="bg-stone-600 text-white px-4 py-2 rounded-lg hover:bg-stone-700 transition-colors text-sm font-medium">Export Data</button>
                     </div>
                     <div class="flex flex-wrap gap-2 mb-4">
                         <button class="filter-btn bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium" data-filter="all">All</button>
@@ -182,10 +191,12 @@
         let auth;
         let userId;
         let isAuthReady = false;
+        let trackerName = "Your Personal Finances"; // Default tracker name
 
         let transactions = [];
         let currentFilter = 'all';
         let saveTimeout;
+        let saveNameTimeout;
 
         const categoryColors = {
             recurring: 'rgb(59, 130, 246)',
@@ -216,6 +227,10 @@
         const loadingOverlay = document.getElementById('loading-overlay');
         const appContent = document.getElementById('app-content');
         const userIdDisplay = document.getElementById('user-id-display');
+        const trackerNameDisplay = document.getElementById('tracker-name-display');
+        const trackerNameInput = document.getElementById('tracker-name-input');
+        const saveNameBtn = document.getElementById('save-name-btn');
+        const exportDataBtn = document.getElementById('export-data-btn');
 
         const ctx = document.getElementById('spending-chart').getContext('2d');
         let spendingChart = new Chart(ctx, {
@@ -301,17 +316,16 @@
                         userIdDisplay.textContent = `User ID: ${userId}`;
                         console.log("Authenticated with user ID:", userId);
                         isAuthReady = true;
-                        await loadTransactions();
+                        await loadUserProfile(); // Load user profile (including tracker name)
+                        await loadTransactions(); // Load transactions
                         loadingOverlay.classList.add('hidden');
                         appContent.classList.remove('hidden');
                     } else {
-                        // Sign in anonymously if no user is authenticated
                         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
                         if (initialAuthToken) {
                             await signInWithCustomToken(auth, initialAuthToken);
                         } else {
                             await signInAnonymously(auth);
-                            // userId will be set by onAuthStateChanged after anonymous sign-in
                         }
                     }
                 });
@@ -319,8 +333,50 @@
                 console.error("Error initializing Firebase or signing in:", error);
                 loadingOverlay.classList.add('hidden');
                 appContent.classList.remove('hidden');
-                // Allow the app to load without persistence if Firebase fails
             }
+        }
+
+        // Load user profile data (like tracker name) from Firestore
+        async function loadUserProfile() {
+            if (!db || !userId) {
+                console.log("Firestore not ready or user ID not available to load profile.");
+                return;
+            }
+            const docRef = doc(db, `artifacts/${__app_id}/users/${userId}/userProfile`, 'settings');
+            onSnapshot(docRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    trackerName = data.trackerName || "Your Personal Finances";
+                    trackerNameDisplay.textContent = trackerName;
+                    trackerNameInput.value = trackerName;
+                    console.log("User profile loaded:", trackerName);
+                } else {
+                    trackerName = "Your Personal Finances"; // Reset to default if no profile
+                    trackerNameDisplay.textContent = trackerName;
+                    trackerNameInput.value = ""; // Clear input if no saved name
+                    console.log("No user profile found, using default tracker name.");
+                }
+            }, (error) => {
+                console.error("Error fetching user profile:", error);
+            });
+        }
+
+        // Save user profile data (like tracker name) to Firestore with debounce
+        function saveUserProfileDebounced() {
+            if (!db || !userId || !isAuthReady) {
+                console.log("Firestore not ready or user ID not available to save profile.");
+                return;
+            }
+            clearTimeout(saveNameTimeout);
+            saveNameTimeout = setTimeout(async () => {
+                try {
+                    const docRef = doc(db, `artifacts/${__app_id}/users/${userId}/userProfile`, 'settings');
+                    await setDoc(docRef, { trackerName: trackerName });
+                    console.log("User profile saved:", trackerName);
+                } catch (error) {
+                    console.error("Error saving user profile:", error);
+                }
+            }, 500);
         }
 
         // Load transactions from Firestore
@@ -335,12 +391,11 @@
             onSnapshot(docRef, (docSnap) => {
                 if (docSnap.exists()) {
                     const data = docSnap.data();
-                    // Ensure transactions is an array, handle potential deserialization if needed
                     transactions = data.transactions || [];
-                    console.log("Data loaded from Firestore:", transactions);
+                    console.log("Transactions loaded from Firestore:", transactions.length);
                 } else {
                     transactions = [];
-                    console.log("No data found for this user in Firestore, starting fresh.");
+                    console.log("No transactions found for this user in Firestore, starting fresh.");
                 }
                 updateUI();
             }, (error) => {
@@ -360,7 +415,7 @@
                 try {
                     const docRef = doc(db, `artifacts/${__app_id}/users/${userId}/spendingData`, 'userExpenses');
                     await setDoc(docRef, { transactions: transactions });
-                    console.log("Data saved to Firestore.");
+                    console.log("Transactions saved to Firestore.");
                 } catch (error) {
                     console.error("Error saving document:", error);
                 }
@@ -389,7 +444,6 @@
             let amount;
 
             if (description === "") {
-                // In a real app, show a proper message box, not just a console error.
                 console.error("Description cannot be empty.");
                 return;
             }
@@ -410,7 +464,7 @@
             }
 
             const transaction = {
-                id: Date.now(), // Unique ID for transaction
+                id: Date.now(),
                 category,
                 description,
                 amount,
@@ -419,9 +473,9 @@
 
             transactions.push(transaction);
             updateUI();
-            saveTransactionsDebounced(); // Save data to Firestore
+            saveTransactionsDebounced();
             expenseForm.reset();
-            categorySelect.dispatchEvent(new Event('change')); // Reset form to default input view
+            categorySelect.dispatchEvent(new Event('change'));
         });
 
         transactionList.addEventListener('click', (e) => {
@@ -429,7 +483,7 @@
                 const id = parseInt(e.target.dataset.id);
                 transactions = transactions.filter(t => t.id !== id);
                 updateUI();
-                saveTransactionsDebounced(); // Save data to Firestore
+                saveTransactionsDebounced();
             }
         });
         
@@ -445,6 +499,55 @@
                 renderTransactions();
             });
         });
+
+        saveNameBtn.addEventListener('click', () => {
+            const newName = trackerNameInput.value.trim();
+            if (newName) {
+                trackerName = newName;
+                trackerNameDisplay.textContent = trackerName;
+                saveUserProfileDebounced();
+            } else {
+                trackerName = "Your Personal Finances"; // Reset to default if input is empty
+                trackerNameDisplay.textContent = trackerName;
+                saveUserProfileDebounced();
+            }
+        });
+
+        // Export data function
+        exportDataBtn.addEventListener('click', () => {
+            if (transactions.length === 0) {
+                console.log("No data to export.");
+                // In a real app, you'd show a user-friendly message, not just console log.
+                return;
+            }
+
+            const headers = ["Description", "Category", "Amount", "Timestamp"];
+            const csvRows = [];
+            csvRows.push(headers.join(','));
+
+            transactions.forEach(t => {
+                const row = [
+                    `"${t.description.replace(/"/g, '""')}"`, // Quote and escape double quotes
+                    categoryDisplayNames[t.category],
+                    t.amount,
+                    new Date(t.timestamp).toLocaleString('en-GB') // Format timestamp
+                ];
+                csvRows.push(row.join(','));
+            });
+
+            const csvString = csvRows.join('\n');
+            const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+
+            link.setAttribute('href', url);
+            link.setAttribute('download', 'spending_tracker_data.csv');
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        });
+
 
         function updateUI() {
             calculateTotals();
@@ -495,7 +598,6 @@
                  transactionList.appendChild(placeholderRow);
             } else {
                 placeholderRow.classList.add('hidden');
-                // Sort transactions by timestamp (most recent first)
                 filteredTransactions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
                 filteredTransactions.forEach(t => {
                     const row = document.createElement('tr');
